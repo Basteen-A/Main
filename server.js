@@ -6,11 +6,11 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use('/auth', require('./routes/auth'));
-app.use('/users', require('./routes/users'));
-app.use('/fields', require('./routes/fields'));
-app.use('/bills', require('./routes/bills'));
-app.use('/iot', require('./routes/iot'));
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/fields', require('./routes/fields'));
+app.use('/api/bills', require('./routes/bills'));
+app.use('/api/iot', require('./routes/iot'));
 
 
 const PORT = process.env.PORT || 5000;
