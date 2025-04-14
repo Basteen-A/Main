@@ -7,7 +7,7 @@ router.post('/signal', (req, res) => {
     return res.status(400).json({ message: 'billId and action required' });
   }
   console.log('Received IoT signal:', { billId, action });
-  // Handle signal (e.g., log, trigger device)
+  // Add IoT logic (e.g., trigger device, log to DB)
   res.json({ success: true });
 });
 
