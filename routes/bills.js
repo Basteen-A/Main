@@ -2,24 +2,30 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
- bills.js
-
-
-// Get all bills for a specific user
+// Get all bills for a specific user with optional filters
 router.get('/user/:userId', (req, res) => {
   const { userId } = req.params;
-  db.query(
-    'SELECT b.id, b.user_id, b.field_id, b.field_name, b.time, b.cost, b.count, b.price_per_count, b.status, b.payment_method, b.created_at, b.start_time, b.stop_time ' +
-    'FROM bills b WHERE user_id = ? ORDER BY created_at DESC',
-    [userId],
-    (err, result) => {
-      if (err) {
-        console.error('Error fetching bills:', err);
-        return res.status(500).json({ message: 'Internal server error' });
-      }
-      res.json(result);
+  const { status, field_name } = req.query;
+  let query = 'SELECT b.id, b.user_id, b.field_id, b.field_name, b.time, b.cost, b.count, b.price_per_count, b.status, b.payment_method, b.created_at, b.start_time, b.stop_time FROM bills b WHERE user_id = ?';
+  const params = [userId];
+
+  if (status) {
+    query += ' AND b.status = ?';
+    params.push(status);
+  }
+  if (field_name) {
+    query += ' AND b.field_name = ?';
+    params.push(field_name);
+  }
+  query += ' ORDER BY created_at DESC';
+
+  db.query(query, params, (err, result) => {
+    if (err) {
+      console.error('Error fetching bills:', err);
+      return res.status(500).json({ message: 'Internal server error' });
     }
-  );
+    res.json(result);
+  });
 });
 
 // Start a new bill (timer or count)
@@ -135,6 +141,76 @@ router.post('/stop', (req, res) => {
     }
   );
 });
+
+// Edit a bill
+router.put('/edit/:billId', (req, res) => {
+  const { billId } = req.params;
+  const { time, cost, count, price_per_count, status } = req.body;
+
+  if (!cost || !status || (count && !price_per_count)) {
+    return res.status(400).json({ message: 'Cost, status, and price per count (if count is provided) are required' });
+  }
+
+  db.query(
+    `SELECT tf.billing_type FROM bills b JOIN tractor_fields tf ON b.field_id = tf.id WHERE b.id = ?`,
+    [billId],
+    (err, result) => {
+      if (err) {
+        console.error('Error fetching bill:', err);
+        return res.status(500).json({ message: 'Internal server error' });
+      }
+      if (result.length === 0) {
+        return res.status(400).json({ message: 'Bill not found' });
+      }
+
+      const isCountBased = result[0].billing_type === 'count';
+      const updateFields = [];
+      const params = [];
+
+      if (time && !isCountBased) {
+        updateFields.push('time = ?');
+        params.push(time);
+      }
+      if (cost) {
+        updateFields.push('cost = ?');
+        params.push(parseFloat(cost));
+      }
+      if (count && isCountBased) {
+        updateFields.push('count = ?');
+        params.push(parseInt(count));
+      }
+      if (price_per_count && isCountBased) {
+        updateFields.push('price_per_count = ?');
+        params.push(parseFloat(price_per_count));
+      }
+      if (status) {
+        updateFields.push('status = ?');
+        params.push(status);
+      }
+
+      if (updateFields.length === 0) {
+        return res.status(400).json({ message: 'No valid fields to update' });
+      }
+
+      params.push(billId);
+      const query = `UPDATE bills SET ${updateFields.join(', ')} WHERE id = ?`;
+
+      db.query(query, params, (err, updateResult) => {
+        if (err) {
+          console.error('Error updating bill:', err);
+          return res.status(500).json({ message: 'Failed to update bill' });
+        }
+        if (updateResult.affectedRows === 0) {
+          return res.status(400).json({ message: 'Bill update failed' });
+        }
+        res.json({ success: true });
+      });
+    }
+  );
+});
+
+// ... other routes (pay, delete) remain unchanged ...
+
 
 // ... other routes (pay, delete) remain unchanged ...
 
