@@ -13,47 +13,13 @@ router.get('/', (req, res) => {
   });
 });
 
-// Add a new timer-based field
+// Add a new field
 router.post('/', (req, res) => {
-  const { name, cost_per_hour } = req.body;
+  const { name, cost_per_hour, billing_type } = req.body;
 
   // Validate input
-  if (!name || !cost_per_hour || isNaN(cost_per_hour)) {
-    return res.status(400).json({ message: 'Field name and valid cost per hour are required' });
-  }
-
-  // Check if field name already exists (since name is UNIQUE in schema)
-  db.query('SELECT * FROM tractor_fields WHERE name = ?', [name], (err, result) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ message: 'Internal server error' });
-    }
-    if (result.length > 0) {
-      return res.status(400).json({ message: 'Field name already exists' });
-    }
-
-    // Insert new field
-    db.query(
-      'INSERT INTO tractor_fields (name, cost_per_hour) VALUES (?, ?)',
-      [name, parseFloat(cost_per_hour)],
-      (err, result) => {
-        if (err) {
-          console.error(err);
-          return res.status(500).json({ message: 'Failed to add field' });
-        }
-        res.json({ success: true, fieldId: result.insertId });
-      }
-    );
-  });
-});
-
-// Add a new count-based field
-router.post('/count', (req, res) => {
-  const { name } = req.body;
-
-  // Validate input
-  if (!name) {
-    return res.status(400).json({ message: 'Field name is required' });
+  if (!name || !billing_type || (billing_type === 'time' && (!cost_per_hour || isNaN(cost_per_hour)))) {
+    return res.status(400).json({ message: 'Field name, billing type, and valid cost per hour (for time-based) are required' });
   }
 
   // Check if field name already exists
@@ -66,14 +32,14 @@ router.post('/count', (req, res) => {
       return res.status(400).json({ message: 'Field name already exists' });
     }
 
-    // Insert new count-based field with cost_per_hour = 0.00
+    // Insert new field
     db.query(
-      'INSERT INTO tractor_fields (name, cost_per_hour) VALUES (?, 0.00)',
-      [name],
+      'INSERT INTO tractor_fields (name, cost_per_hour, billing_type) VALUES (?, ?, ?)',
+      [name, billing_type === 'count' ? 0 : parseFloat(cost_per_hour), billing_type],
       (err, result) => {
         if (err) {
           console.error(err);
-          return res.status(500).json({ message: 'Failed to add count field' });
+          return res.status(500).json({ message: 'Failed to add field' });
         }
         res.json({ success: true, fieldId: result.insertId });
       }
