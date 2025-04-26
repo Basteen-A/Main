@@ -11,25 +11,23 @@ router.post('/start', (req, res) => {
     return res.status(400).json({ message: 'User ID and field name are required' });
   }
 
-  // Validate user_id
   db.query('SELECT id FROM users WHERE id = ?', [user_id], (err, userResult) => {
     if (err) {
       console.error('Database error checking user:', err);
-      return res.status(500).json({ message: 'Internal server error', details: err.message });
+      return res.status(500).json({ message: 'Internal server error' });
     }
     if (userResult.length === 0) {
       console.error('User not found:', user_id);
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Validate field_name
     db.query(
       'SELECT name, billing_type, cost_per_hour FROM tractor_fields WHERE name = ?',
       [field_name],
       (err, fieldResult) => {
         if (err) {
           console.error('Database error checking field:', err);
-          return res.status(500).json({ message: 'Internal server error', details: err.message });
+          return res.status(500).json({ message: 'Internal server error' });
         }
         if (fieldResult.length === 0) {
           console.error('Field not found:', field_name);
@@ -40,13 +38,12 @@ router.post('/start', (req, res) => {
           return res.status(400).json({ message: 'Field must be time-based' });
         }
 
-        // Insert bill
         const bill = {
           user_id,
           field_name,
           start_time: new Date(),
           status: 'running',
-          cost_per_hour: fieldResult[0].cost_per_hour || 0.00, // Default to 0 if null
+          cost_per_hour: fieldResult[0].cost_per_hour || 0.00,
         };
 
         db.query(
@@ -55,7 +52,7 @@ router.post('/start', (req, res) => {
           (err, result) => {
             if (err) {
               console.error('Database error inserting bill:', err);
-              return res.status(500).json({ message: 'Failed to start bill', details: err.message });
+              return res.status(500).json({ message: 'Failed to start bill' });
             }
             console.log('Bill started:', { billId: result.insertId, user_id, field_name });
             res.json({ success: true, billId: result.insertId });
@@ -81,7 +78,7 @@ router.post('/stop', (req, res) => {
     (err, result) => {
       if (err) {
         console.error('Database error fetching bill:', err);
-        return res.status(500).json({ message: 'Internal server error', details: err.message });
+        return res.status(500).json({ message: 'Internal server error' });
       }
       if (result.length === 0) {
         console.error('Bill not found or not running:', billId);
@@ -101,7 +98,7 @@ router.post('/stop', (req, res) => {
         (err) => {
           if (err) {
             console.error('Database error updating bill:', err);
-            return res.status(500).json({ message: 'Failed to stop bill', details: err.message });
+            return res.status(500).json({ message: 'Failed to stop bill' });
           }
           console.log('Bill stopped:', { billId, time, cost });
           res.json({ success: true, time, cost });
@@ -111,29 +108,140 @@ router.post('/stop', (req, res) => {
   );
 });
 
-// Pay a bill
+// Pay a bill (full or partial payment)
 router.post('/pay', (req, res) => {
-  const { billId, payment_method } = req.body;
+  const { billId, payment_method, amount } = req.body;
 
-  if (!billId || !payment_method) {
-    console.error('Missing billId or payment_method:', { billId, payment_method });
-    return res.status(400).json({ message: 'Bill ID and payment method are required' });
+  if (!billId || !payment_method || !amount || amount <= 0) {
+    console.error('Invalid payment data:', { billId, payment_method, amount });
+    return res.status(400).json({ message: 'Bill ID, payment method, and valid amount are required' });
   }
 
   db.query(
-    'UPDATE bills SET status = ? WHERE id = ? AND status = ?',
-    ['completed', billId, 'pending'],
-    (err, result) => {
+    'SELECT cost, status FROM bills WHERE id = ?',
+    [billId],
+    (err, billResult) => {
       if (err) {
-        console.error('Database error updating bill status:', err);
-        return res.status(500).json({ message: 'Internal server error', details: err.message });
+        console.error('Database error fetching bill:', err);
+        return res.status(500).json({ message: 'Internal server error' });
       }
-      if (result.affectedRows === 0) {
+      if (billResult.length === 0 || billResult[0].status !== 'pending') {
         console.error('Bill not found or not pending:', billId);
         return res.status(404).json({ message: 'Bill not found or not pending' });
       }
-      console.log('Bill marked as completed:', { billId });
-      res.json({ success: true });
+
+      const billCost = parseFloat(billResult[0].cost);
+      db.query(
+        'SELECT SUM(amount) as totalPaid FROM payments WHERE bill_id = ? AND status = ?',
+        [billId, 'completed'],
+        (err, paymentSum) => {
+          if (err) {
+            console.error('Database error calculating payments:', err);
+            return res.status(500).json({ message: 'Internal server error' });
+          }
+          const totalPaid = parseFloat(paymentSum[0].totalPaid) || 0;
+          if (amount > (billCost - totalPaid)) {
+            console.error('Payment amount exceeds remaining bill cost:', { billId, amount, billCost, totalPaid });
+            return res.status(400).json({ message: 'Payment amount cannot exceed remaining bill cost' });
+          }
+
+          db.query(
+            'INSERT INTO payments (bill_id, amount, payment_method, status) VALUES (?, ?, ?, ?)',
+            [billId, amount, payment_method, 'pending'],
+            (err, result) => {
+              if (err) {
+                console.error('Database error inserting payment:', err);
+                return res.status(500).json({ message: 'Failed to record payment' });
+              }
+              console.log('Payment recorded:', { billId, paymentId: result.insertId, amount });
+              res.json({ success: true, paymentId: result.insertId });
+            }
+          );
+        }
+      );
+    }
+  );
+});
+
+// Confirm a payment
+router.post('/confirm-payment', (req, res) => {
+  const { paymentId } = req.body;
+
+  if (!paymentId) {
+    console.error('Missing paymentId');
+    return res.status(400).json({ message: 'Payment ID is required' });
+  }
+
+  db.query(
+    'UPDATE payments SET status = ? WHERE id = ? AND status = ?',
+    ['completed', paymentId, 'pending'],
+    (err, paymentResult) => {
+      if (err) {
+        console.error('Database error updating payment:', err);
+        return res.status(500).json({ message: 'Internal server error' });
+      }
+      if (paymentResult.affectedRows === 0) {
+        console.error('Payment not found or already confirmed:', paymentId);
+        return res.status(404).json({ message: 'Payment not found or already confirmed' });
+      }
+
+      db.query(
+        'SELECT bill_id FROM payments WHERE id = ?',
+        [paymentId],
+        (err, payment) => {
+          if (err) {
+            console.error('Database error fetching payment:', err);
+            return res.status(500).json({ message: 'Internal server error' });
+          }
+
+          const billId = payment[0].bill_id;
+          db.query(
+            'SELECT SUM(amount) as totalPaid FROM payments WHERE bill_id = ? AND status = ?',
+            [billId, 'completed'],
+            (err, paymentSum) => {
+              if (err) {
+                console.error('Database error calculating payments:', err);
+                return res.status(500).json({ message: 'Internal server error' });
+              }
+
+              db.query(
+                'SELECT cost FROM bills WHERE id = ? AND status = ?',
+                [billId, 'pending'],
+                (err, billResult) => {
+                  if (err) {
+                    console.error('Database error fetching bill:', err);
+                    return res.status(500).json({ message: 'Internal server error' });
+                  }
+                  if (billResult.length === 0) {
+                    console.error('Bill not found or not pending:', billId);
+                    return res.status(404).json({ message: 'Bill not found or not pending' });
+                  }
+
+                  const totalPaid = parseFloat(paymentSum[0].totalPaid) || 0;
+                  const billCost = parseFloat(billResult[0].cost);
+                  if (totalPaid >= billCost) {
+                    db.query(
+                      'UPDATE bills SET status = ? WHERE id = ?',
+                      ['completed', billId],
+                      (err) => {
+                        if (err) {
+                          console.error('Database error updating bill status:', err);
+                          return res.status(500).json({ message: 'Internal server error' });
+                        }
+                        console.log('Bill marked as completed:', { billId, totalPaid });
+                        res.json({ success: true, billCompleted: true });
+                      }
+                    );
+                  } else {
+                    console.log('Payment confirmed, bill remains pending:', { billId, totalPaid });
+                    res.json({ success: true, billCompleted: false });
+                  }
+                }
+              );
+            }
+          );
+        }
+      );
     }
   );
 });
@@ -143,18 +251,22 @@ router.put('/edit/:billId', (req, res) => {
   const { billId } = req.params;
   const { time, cost, status } = req.body;
 
-  if (!time || isNaN(cost) || !status) {
+  if (!cost || isNaN(cost) || !status) {
     console.error('Invalid edit data:', { time, cost, status });
-    return res.status(400).json({ message: 'Time, cost, and status are required' });
+    return res.status(400).json({ message: 'Cost and status are required' });
+  }
+  if (time && !/^\d{2}:\d{2}:\d{2}$/.test(time)) {
+    console.error('Invalid time format:', time);
+    return res.status(400).json({ message: 'Time must be in HH:MM:SS format' });
   }
 
   db.query(
     'UPDATE bills SET time = ?, cost = ?, status = ? WHERE id = ?',
-    [time, parseFloat(cost), status, billId],
+    [time || null, parseFloat(cost), status, billId],
     (err, result) => {
       if (err) {
         console.error('Database error editing bill:', err);
-        return res.status(500).json({ message: 'Failed to edit bill', details: err.message });
+        return res.status(500).json({ message: 'Failed to edit bill' });
       }
       if (result.affectedRows === 0) {
         console.error('Bill not found:', billId);
@@ -171,30 +283,79 @@ router.get('/user/:userId', (req, res) => {
   const { userId } = req.params;
   const { status, field_name } = req.query;
 
-  let query = 'SELECT * FROM bills WHERE user_id = ?';
+  if (!userId) {
+    console.error('Missing userId');
+    return res.status(400).json({ message: 'User ID is required' });
+  }
+
+  let query = `
+    SELECT b.*, COALESCE(SUM(p.amount), 0) as total_paid
+    FROM bills b
+    LEFT JOIN payments p ON b.id = p.bill_id AND p.status = 'completed'
+    WHERE b.user_id = ?
+  `;
   const params = [userId];
 
   if (status) {
-    query += ' AND status = ?';
+    query += ' AND b.status = ?';
     params.push(status);
   }
   if (field_name) {
-    query += ' AND field_name = ?';
+    query += ' AND b.field_name = ?';
     params.push(field_name);
   }
+  query += ' GROUP BY b.id';
 
   db.query(query, params, (err, result) => {
     if (err) {
       console.error('Database error fetching bills:', err);
-      return res.status(500).json({ message: 'Internal server error', details: err.message });
+      return res.status(500).json({ message: 'Internal server error' });
     }
     console.log('Fetched bills for user:', { userId, count: result.length });
     res.json(result);
   });
 });
 
-<<<<<<< HEAD
+// Delete all bills for a user
+router.delete('/user/:userId', (req, res) => {
+  const { userId } = req.params;
+
+  if (!userId) {
+    console.error('Missing userId');
+    return res.status(400).json({ message: 'User ID is required' });
+  }
+
+  db.query('DELETE FROM bills WHERE user_id = ?', [userId], (err, result) => {
+    if (err) {
+      console.error('Database error deleting bills:', err);
+      return res.status(500).json({ message: 'Internal server error' });
+    }
+    console.log('Bills deleted for user:', { userId, deletedCount: result.affectedRows });
+    res.json({ success: true, deletedCount: result.affectedRows });
+  });
+});
+
+// Delete a specific bill
+router.delete('/:billId', (req, res) => {
+  const { billId } = req.params;
+
+  if (!billId) {
+    console.error('Missing billId');
+    return res.status(400).json({ message: 'Bill ID is required' });
+  }
+
+  db.query('DELETE FROM bills WHERE id = ?', [billId], (err, result) => {
+    if (err) {
+      console.error('Database error deleting bill:', err);
+      return res.status(500).json({ message: 'Internal server error' });
+    }
+    if (result.affectedRows === 0) {
+      console.error('Bill not found:', billId);
+      return res.status(404).json({ message: 'Bill not found' });
+    }
+    console.log('Bill deleted:', { billId });
+    res.json({ success: true });
+  });
+});
+
 module.exports = router;
-=======
-module.exports = router;
->>>>>>> 35e3e8e7f44eb31f0193568363a6a3b5958c615c
