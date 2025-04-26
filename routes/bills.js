@@ -193,4 +193,8 @@ router.get('/user/:userId', (req, res) => {
   });
 });
 
+<<<<<<< HEAD
 module.exports = router;
+=======
+module.exports = router;
+>>>>>>> 35e3e8e7f44eb31f0193568363a6a3b5958c615c
