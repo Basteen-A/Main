@@ -358,4 +358,37 @@ router.delete('/:billId', (req, res) => {
   });
 });
 
+
+
+const handleDeleteBillHistory = async (userId) => {
+  Alert.alert(
+    'Confirm',
+    'Are you sure you want to delete this user\'s bill history?',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const response = await axios.delete(`${BASE_URL}/bills/user/${userId}`);
+            if (response.status === 200) {
+              Alert.alert('Success', `Deleted ${response.data.deletedCount} bills successfully`);
+              fetchBills();
+            } else {
+              throw new Error('Failed to delete bills');
+            }
+          } catch (error) {
+            console.error('Delete bill history error:', error.response?.status, error.response?.data || error.message);
+            const message = error.response?.status === 404
+              ? 'No bills found for this user'
+              : error.response?.data?.message || 'Failed to delete bill history';
+            Alert.alert('Error', message);
+          }
+        },
+      },
+    ]
+  );
+};
+
 module.exports = router;
